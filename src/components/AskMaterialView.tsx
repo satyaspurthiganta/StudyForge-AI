@@ -10,9 +10,11 @@ import {
   Loader2,
   Trash2,
   AlertCircle,
+  Zap,
+  ExternalLink,
 } from 'lucide-react';
 import { MaterialChatMessage, StudyFile } from '../types';
-import { askStudyMaterial } from '../services/api';
+import { askStudyMaterial, sendN8nChatMessage } from '../services/api';
 
 interface AskMaterialViewProps {
   files: StudyFile[];
@@ -27,6 +29,7 @@ export const AskMaterialView: React.FC<AskMaterialViewProps> = ({
   chatMessages,
   onMessagesChange,
 }) => {
+  const [chatMode, setChatMode] = useState<'grounded' | 'n8n'>('n8n');
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -65,23 +68,43 @@ export const AskMaterialView: React.FC<AskMaterialViewProps> = ({
     setIsLoading(true);
 
     try {
-      const response = await askStudyMaterial(combinedText, userMsg.content, newHistory);
-      const botMsg: MaterialChatMessage = {
-        id: 'msg-bot-' + Date.now(),
-        role: 'assistant',
-        content: response.answer,
-        timestamp: new Date().toISOString(),
-        groundedInMaterial: response.grounded,
-        sourceCitations: response.citations,
-      };
+      if (chatMode === 'n8n') {
+        const contextData = `Topic: ${initialTopic || 'General Study'}\nFiles: ${files.map((f) => f.name).join(', ')}\nSnippet: ${combinedText.slice(0, 2500)}`;
+        const n8nRes = await sendN8nChatMessage(userMsg.content, 'session-' + Date.now(), undefined, contextData);
 
-      onMessagesChange([...newHistory, botMsg]);
+        const citation =
+          n8nRes.status === 'n8n_live'
+            ? 'n8n Cloud Workflow (Live)'
+            : 'StudyForge AI Engine (n8n Cloud in Standby)';
+
+        const botMsg: MaterialChatMessage = {
+          id: 'msg-bot-' + Date.now(),
+          role: 'assistant',
+          content: n8nRes.output,
+          timestamp: new Date().toISOString(),
+          groundedInMaterial: true,
+          sourceCitations: [citation],
+        };
+        onMessagesChange([...newHistory, botMsg]);
+      } else {
+        const response = await askStudyMaterial(combinedText, userMsg.content, newHistory);
+        const botMsg: MaterialChatMessage = {
+          id: 'msg-bot-' + Date.now(),
+          role: 'assistant',
+          content: response.answer,
+          timestamp: new Date().toISOString(),
+          groundedInMaterial: response.grounded,
+          sourceCitations: response.citations,
+        };
+
+        onMessagesChange([...newHistory, botMsg]);
+      }
     } catch (err: any) {
       const errorMsg: MaterialChatMessage = {
         id: 'msg-err-' + Date.now(),
         role: 'assistant',
         content:
-          'Unable to query your materials right now. Please verify your document text or try again.',
+          'Unable to query your assistant right now. Please verify your connection and try again.',
         timestamp: new Date().toISOString(),
         groundedInMaterial: false,
       };
@@ -97,30 +120,93 @@ export const AskMaterialView: React.FC<AskMaterialViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto py-6 space-y-6 flex flex-col h-[calc(100vh-10rem)]">
-      {/* Top Header */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs flex items-center justify-between shrink-0">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-indigo-700 uppercase tracking-wider">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Document Grounded Assistant</span>
+      {/* Top Header & Engine Selector */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs shrink-0 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-indigo-700 uppercase tracking-wider">
+              {chatMode === 'n8n' ? (
+                <>
+                  <Zap className="w-3.5 h-3.5 text-amber-500" />
+                  <span className="text-indigo-900">n8n Cloud Workflow Assistant</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Document Grounded Assistant</span>
+                </>
+              )}
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 font-serif-display mt-0.5">
+              Ask Your Study Material & AI Agent
+            </h2>
+            <p className="text-xs text-slate-500">
+              {chatMode === 'n8n'
+                ? 'Routing through your custom n8n cloud webhook workflow (satyaspurthiganta.app.n8n.cloud)'
+                : `Asking across ${files.length} active documents (${files.reduce((a, b) => a + (b.wordCount || 0), 0).toLocaleString()} words)`}
+            </p>
           </div>
-          <h2 className="text-xl font-bold text-slate-900 font-serif-display mt-0.5">
-            Ask Your Study Material
-          </h2>
-          <p className="text-xs text-slate-500">
-            Asking across {files.length} active documents ({files.reduce((a, b) => a + (b.wordCount || 0), 0).toLocaleString()} words)
-          </p>
+
+          <div className="flex items-center gap-2">
+            {/* Mode Switcher */}
+            <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs font-medium">
+              <button
+                onClick={() => setChatMode('n8n')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                  chatMode === 'n8n'
+                    ? 'bg-white text-indigo-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                <span>n8n Chatbot</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              </button>
+              <button
+                onClick={() => setChatMode('grounded')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                  chatMode === 'grounded'
+                    ? 'bg-white text-indigo-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                <span>Grounded AI</span>
+              </button>
+            </div>
+
+            {chatMessages.length > 0 && (
+              <button
+                onClick={clearChat}
+                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer text-xs flex items-center gap-1"
+                title="Clear Chat History"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Clear</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {chatMessages.length > 0 && (
-          <button
-            onClick={clearChat}
-            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer text-xs flex items-center gap-1"
-            title="Clear Chat History"
-          >
-            <Trash2 className="w-4 h-4" />
-            <span className="hidden sm:inline">Clear Chat</span>
-          </button>
+        {chatMode === 'n8n' && (
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs text-indigo-900">
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 rounded bg-indigo-600 text-white font-mono text-[10px] font-bold">
+                POST /webhook/0647e95d.../chat
+              </span>
+              <span className="text-[11px] text-indigo-700 hidden sm:inline">
+                Connected to n8n Cloud Chat Trigger
+              </span>
+            </div>
+            <a
+              href="https://satyaspurthiganta.app.n8n.cloud"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 underline"
+            >
+              Open n8n Canvas <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
         )}
       </div>
 

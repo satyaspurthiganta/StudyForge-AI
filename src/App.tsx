@@ -15,6 +15,7 @@ import { QuizResultsView } from './components/QuizResultsView';
 import { QuizReviewView } from './components/QuizReviewView';
 import { ProgressDashboard } from './components/ProgressDashboard';
 import { AskMaterialView } from './components/AskMaterialView';
+import { N8nChatWidget } from './components/N8nChatWidget';
 import {
   StudyFile,
   StudyScope,
@@ -486,10 +487,13 @@ export default function App() {
             <span>Turn your study material into smarter preparation</span>
           </div>
           <div>
-            <span>Strict document grounding · AI-assisted academic intelligence</span>
+            <span>Strict document grounding · Connected to n8n workflow</span>
           </div>
         </div>
       </footer>
+
+      {/* Floating n8n AI Chat Assistant */}
+      <N8nChatWidget files={files} activeTopic={activeTopic} />
     </div>
   );
 }

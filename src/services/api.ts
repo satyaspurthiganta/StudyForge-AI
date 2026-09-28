@@ -206,3 +206,77 @@ export async function askStudyMaterial(
     citations: ['Module 1 & 2 Coursepack'],
   };
 }
+
+export async function checkN8nStatus(url?: string): Promise<{
+  isLive: boolean;
+  activeMode: 'production' | 'test' | 'inactive';
+  detailMessage: string;
+  checkedUrl: string;
+  help: string;
+}> {
+  try {
+    const res = await fetch(`/api/n8n-status?url=${encodeURIComponent(url || '')}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    // ignore
+  }
+  return {
+    isLive: false,
+    activeMode: 'inactive',
+    detailMessage: 'Could not contact n8n webhook',
+    checkedUrl: url || '',
+    help: 'Workflow is in standby mode. Toggle to Active in n8n Cloud.',
+  };
+}
+
+export async function sendN8nChatMessage(
+  message: string,
+  sessionId?: string,
+  webhookUrl?: string,
+  context?: string
+): Promise<{
+  output: string;
+  sessionId?: string;
+  status: 'n8n_live' | 'active_with_fallback' | 'inactive_workflow' | 'error';
+  n8nConnected?: boolean;
+  n8nNotice?: { message?: string; hint?: string; webhookUrl?: string };
+}> {
+  try {
+    const res = await fetch('/api/n8n-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        sessionId,
+        webhookUrl: webhookUrl || 'https://satyaspurthiganta.app.n8n.cloud/webhook/0647e95d-de4d-48e3-98ba-4a68f442c81a/chat',
+        context,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        output: data.output || 'No response message returned.',
+        sessionId: data.sessionId,
+        status: data.status || 'n8n_live',
+        n8nConnected: data.n8nConnected ?? true,
+        n8nNotice: data.n8nNotice,
+      };
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      return {
+        output: errData.error || 'Failed to communicate with chat engine.',
+        status: 'error',
+        n8nConnected: false,
+      };
+    }
+  } catch (err: any) {
+    return {
+      output: `Network communication error: ${err.message || 'Could not connect to proxy'}`,
+      status: 'error',
+      n8nConnected: false,
+    };
+  }
+}

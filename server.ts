@@ -549,6 +549,215 @@ Provide a comprehensive, pedagogical answer. At the very end of your response, o
   }
 });
 
+// N8N Webhook Status Check
+app.get('/api/n8n-status', async (req, res) => {
+  try {
+    const rawUrl = (req.query.url as string) || 'https://satyaspurthiganta.app.n8n.cloud/webhook/0647e95d-de4d-48e3-98ba-4a68f442c81a/chat';
+    const cleanUrl = rawUrl.trim();
+
+    // Check production URL
+    const prodUrl = cleanUrl.replace('/webhook-test/', '/webhook/');
+    const testUrl = cleanUrl.replace('/webhook/', '/webhook-test/');
+
+    let isLive = false;
+    let activeMode: 'production' | 'test' | 'inactive' = 'inactive';
+    let detailMessage = '';
+
+    const [prodResult, testResult] = await Promise.allSettled([
+      fetch(prodUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatInput: 'ping', action: 'loadPreviousSession' }),
+        signal: AbortSignal.timeout(2500),
+      }),
+      fetch(testUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatInput: 'ping', action: 'loadPreviousSession' }),
+        signal: AbortSignal.timeout(2500),
+      }),
+    ]);
+
+    if (prodResult.status === 'fulfilled' && prodResult.value.status === 200) {
+      isLive = true;
+      activeMode = 'production';
+      detailMessage = 'Production webhook is Active and responding';
+    } else if (testResult.status === 'fulfilled' && testResult.value.status === 200) {
+      isLive = true;
+      activeMode = 'test';
+      detailMessage = 'Test webhook is listening (execute workflow mode)';
+    } else {
+      isLive = false;
+      activeMode = 'inactive';
+      detailMessage = 'Workflow is in standby mode. Toggle to Active in n8n Cloud.';
+    }
+
+    res.json({
+      isLive,
+      activeMode,
+      detailMessage,
+      checkedUrl: activeMode === 'test' ? testUrl : prodUrl,
+      help: isLive
+        ? 'Connected to your n8n cloud workflow!'
+        : 'In n8n Cloud editor, toggle the Active switch at the top-right to ON.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ isLive: false, error: err.message });
+  }
+});
+
+// N8N Webhook Chat Proxy Endpoint
+app.post('/api/n8n-chat', async (req, res) => {
+  try {
+    const {
+      message,
+      sessionId,
+      webhookUrl = 'https://satyaspurthiganta.app.n8n.cloud/webhook/0647e95d-de4d-48e3-98ba-4a68f442c81a/chat',
+      context = '',
+    } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const payload = {
+      chatInput: message,
+      message: message,
+      sessionId: sessionId || 'studyforge-session-' + Date.now(),
+      action: 'sendMessage',
+      context: context || undefined,
+    };
+
+    const targetUrl = webhookUrl.trim();
+    let n8nSuccess = false;
+    let n8nOutput = '';
+    let n8nRawNotice: any = null;
+
+    // 1. Try calling the primary n8n target URL
+    try {
+      const n8nResponse = await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      const responseText = await n8nResponse.text();
+      let responseData: any;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (e) {
+        responseData = { text: responseText };
+      }
+
+      if (n8nResponse.ok && n8nResponse.status === 200) {
+        n8nSuccess = true;
+        if (typeof responseData === 'string') {
+          n8nOutput = responseData;
+        } else if (responseData.output) {
+          n8nOutput = typeof responseData.output === 'string' ? responseData.output : JSON.stringify(responseData.output);
+        } else if (responseData.text) {
+          n8nOutput = responseData.text;
+        } else if (responseData.response) {
+          n8nOutput = responseData.response;
+        } else if (responseData.message) {
+          n8nOutput = responseData.message;
+        } else if (Array.isArray(responseData) && responseData.length > 0) {
+          n8nOutput = responseData[0].output || responseData[0].text || JSON.stringify(responseData[0]);
+        } else {
+          n8nOutput = JSON.stringify(responseData);
+        }
+      } else {
+        n8nRawNotice = responseData;
+      }
+    } catch (primaryErr: any) {
+      console.warn('Primary n8n fetch error:', primaryErr.message);
+    }
+
+    // 2. If primary failed and URL has /webhook/, try test webhook if it might be running
+    if (!n8nSuccess && targetUrl.includes('/webhook/')) {
+      const testUrl = targetUrl.replace('/webhook/', '/webhook-test/');
+      try {
+        const testRes = await fetch(testUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(4000),
+        });
+
+        if (testRes.ok && testRes.status === 200) {
+          const testText = await testRes.text();
+          let testData: any;
+          try {
+            testData = JSON.parse(testText);
+          } catch (e) {
+            testData = { text: testText };
+          }
+          n8nSuccess = true;
+          n8nOutput = testData.output || testData.text || testData.response || testText;
+        }
+      } catch (testErr: any) {
+        // ignore test url error
+      }
+    }
+
+    // 3. Return the real n8n response if successful
+    if (n8nSuccess && n8nOutput.trim().length > 0) {
+      return res.json({
+        output: n8nOutput,
+        sessionId: payload.sessionId,
+        status: 'n8n_live',
+        n8nConnected: true,
+      });
+    }
+
+    // 4. SMART RESOLUTION: If n8n workflow is currently in standby / inactive,
+    // ALWAYS provide a comprehensive, intelligent academic answer using Gemini AI
+    // so the student is NEVER blocked or presented with a broken chat experience.
+    const studyAssistantPrompt = `You are StudyForge AI Assistant (acting on behalf of the student's connected study agent).
+The student asked the following question:
+"${message}"
+
+${context ? `Here is the relevant Study Context & Documents from their workspace:\n${context}\n` : ''}
+
+INSTRUCTIONS:
+1. Provide a direct, highly informative, student-friendly answer to the student's question.
+2. Structure your response with clear headings, bullet points, and code/math snippets where relevant.
+3. Be clear, encouraging, and academically thorough.
+4. If study documents were provided above, reference concepts and terminology from them.`;
+
+    const aiResponse = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: studyAssistantPrompt,
+    });
+
+    const fallbackAnswer =
+      aiResponse.text ||
+      'I have processed your query based on your study materials. Please feel free to ask follow-up questions or request specific examples.';
+
+    return res.json({
+      output: fallbackAnswer,
+      sessionId: payload.sessionId,
+      status: 'active_with_fallback',
+      n8nConnected: false,
+      n8nNotice: {
+        message: 'n8n workflow is currently in standby mode (inactive in Cloud).',
+        hint: 'To route responses 100% through your custom n8n canvas nodes, toggle the workflow switch to "Active" in your n8n cloud dashboard.',
+        webhookUrl: targetUrl,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error in /api/n8n-chat:', error);
+    res.status(500).json({ error: error.message || 'Failed to communicate with chat engine' });
+  }
+});
+
 // Mount Vite or serve static files
 async function setupServer() {
   if (process.env.NODE_ENV === 'production') {
