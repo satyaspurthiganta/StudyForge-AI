@@ -1,0 +1,8 @@
+{
+  "name": "StudyForge AI",
+  "description": "AI-powered study platform to transform study materials into grounded revision notes, topic-specific MCQ quizzes, and weak-topic masteries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
